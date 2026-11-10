@@ -1,0 +1,3 @@
+ID;Data i Czas;Adres Docelowy;Kwota (Sats);Tryb;TXID;Status
+1;2026-11-10 15:10:48;piotr12@speed.app;323;Ręczna;cedbd1e3f293a5b7c44f6e219df3f0440d5580e6ab294b3f8c0f8da634c05896;Confirmed
+2;2026-11-10 15:44:32;piotr12@speed.app;20000;Auto;85a92ed5feb93fdc9a1658668a97fb74c3882b09d0f518fd7be980d86728b2a9;Confirmed
