@@ -1,7 +1,285 @@
-<html>
-  <head>
-    <div>
-      
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>SpeedReward Gain Hub & Multi-Core Miner</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }
+        .container { max-width: 650px; margin: 0 auto; background: #1e293b; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.4); }
+        h1 { color: #f59e0b; text-align: center; }
+        .card { background: #334155; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+        input, button { width: 100%; padding: 10px; margin-top: 8px; border-radius: 6px; border: none; font-size: 16px; box-sizing: border-box; }
+        input { background: #1e293b; color: #fff; border: 1px solid #475569; }
+        button { background: #f59e0b; color: #000; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+        button:hover { background: #d97706; }
+        .btn-speed { background: #3b82f6; color: #fff; }
+        .btn-speed:hover { background: #2563eb; }
+        pre { background: #0f172a; padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 13px; color: #38bdf8; }
+        .info-text { font-size: 14px; color: #cbd5e1; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚡ SpeedReward Gain Hub</h1>
+        
+        <!-- 1. REGULOWANY MINER CPU (WIDOCZNY NA GÓRZE) -->
+        <div class="card" style="border-left: 4px solid #ef4444;">
+            <h3>🔥 Regulowany Multi-Core CPU Miner</h3>
+            <p class="info-text">Wykryto rdzeni w procesorze: <strong id="max-cores" style="color: #38bdf8;">?</strong></p>
+            
+            <div style="margin: 15px 0;">
+                <label for="core-slider" style="display: block; margin-bottom: 5px;">Aktywne rdzenie do kopania: <span id="slider-val" style="color: #f59e0b; font-weight: bold;">1</span></label>
+                <input type="range" id="core-slider" min="1" max="1" value="1" oninput="updateCoreSelection(this.value)" style="width: 100%; cursor: pointer;">
+            </div>
+
+            <button id="heavy-miner-btn" onclick="toggleRegulatedMiner()" style="background: #ef4444; color: #fff;">Start Minera z wybranymi rdzeniami</button>
+            <p style="margin-top: 10px; font-size: 14px;">Pracujące wątki: <strong id="active-worker-count" style="color: #38bdf8;">0</strong> | Hashrate: <strong id="total-heavy-hashrate" style="color: #f59e0b;">0</strong> H/s</p>
+        </div>
+
+        <!-- 2. ZADANIA FAUCETA Z TIMEREM -->
+        <div class="card" style="border-left: 4px solid #f59e0b;">
+            <h3>⚡ Faucet Tasks (Zarabiaj za zadania)</h3>
+            <p class="info-text">Wykonaj zadanie, aby zdobyć dodatkowe punkty (zabezpieczone timerem):</p>
+            <button id="task-btn" onclick="completeTask()" style="background: #3b82f6; color: #fff;">Wykonaj zadanie + Losowe Punkty</button>
+        </div>
+
+        <!-- 3. STAN SALDA I PRZELICZENIE -->
+        <div class="card">
+            <h3>3. Saldo i Wycena Rynkowa</h3>
+            <label class="info-text">Punkty z minera / zadań:</label>
+            <input type="number" id="js_mined" value="0">
+            <button onclick="checkBalance()" style="margin-top: 10px;">Przelicz na Satoshi (API)</button>
+            
+            <p style="margin-top: 15px;">Satoshi: <strong id="res_sats" style="color: #f59e0b;">0</strong> sats</p>
+            <p>Wartość USD: $<strong id="res_usd" style="color: #10b981;">0.00</strong></p>
+        </div>
+
+        <!-- 4. WYPŁATA I PRZELEW DO SPEED -->
+        <div class="card">
+            <h3>4. Wypłata & Speed Ledger</h3>
+            <label class="info-text">Adres Lightning / Faktura BOLT11:</label>
+            <input type="text" id="payout_destination" placeholder="lnbc1p... lub Speed-Account">
+            
+            <div style="display: flex; gap: 10px; margin-top: 10px;">
+                <button onclick="claimPayout()" style="background: #10b981; color: #fff; flex: 1;">Zleć wypłatę (Lightning)</button>
+                <button onclick="transferToSpeed()" class="btn-speed" style="flex: 1;">Przelej do Speed Ledger</button>
+            </div>
+        </div>
+
+        <!-- 5. LOGI -->
+        <div class="card">
+            <h3>Logi systemowe:</h3>
+            <pre id="output">System gotowy do pracy...</pre>
+        </div>
     </div>
-  </head>
+
+    <script>
+        // --- LOGIKA MINERA CPU ---
+        let workers = [];
+        let isHeavyMining = false;
+        let globalHashes = 0;
+        let maxAvailableCores = navigator.hardwareConcurrency || 4;
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const slider = document.getElementById('core-slider');
+            document.getElementById('max-cores').innerText = maxAvailableCores;
+            slider.max = maxAvailableCores;
+            slider.value = Math.min(2, maxAvailableCores);
+            document.getElementById('slider-val').innerText = slider.value;
+        });
+
+        function updateCoreSelection(val) {
+            document.getElementById('slider-val').innerText = val;
+            if (isHeavyMining) {
+                restartMinerWithCores(parseInt(val));
+            }
+        }
+
+        const workerCode = `
+            self.onmessage = function(e) {
+                const { seed, workerId } = e.data;
+                let nonce = workerId * 1000000000;
+                let localHashes = 0;
+                while (true) {
+                    nonce++;
+                    localHashes++;
+                    let val = seed + nonce;
+                    for (let i = 0; i < 50000; i++) {
+                        val = (val * 1103515245 + 12345) & 0x7fffffff;
+                    }
+                    if (localHashes % 2000 === 0) {
+                        self.postMessage({ hashes: localHashes });
+                        localHashes = 0;
+                    }
+                }
+            };
+        `;
+
+        function toggleRegulatedMiner() {
+            const btn = document.getElementById('heavy-miner-btn');
+            isHeavyMining = !isHeavyMining;
+
+            if (isHeavyMining) {
+                btn.innerText = "Zatrzymaj Miner";
+                btn.style.background = "#334155";
+                const targetCores = parseInt(document.getElementById('core-slider').value);
+                startWorkers(targetCores);
+            } else {
+                btn.innerText = "Start Minera z wybranymi rdzeniami";
+                btn.style.background = "#ef4444";
+                stopWorkers();
+            }
+        }
+
+        function startWorkers(count) {
+            stopWorkers();
+            globalHashes = 0;
+            const seed = Math.floor(Math.random() * 999999);
+            const blob = new Blob([workerCode], { type: 'application/javascript' });
+            const workerUrl = URL.createObjectURL(blob);
+
+            document.getElementById('active-worker-count').innerText = count;
+
+            for (let i = 0; i < count; i++) {
+                const worker = new Worker(workerUrl);
+                worker.onmessage = function(e) {
+                    globalHashes += 2000;
+                    document.getElementById('total-heavy-hashrate').innerText = globalHashes;
+                    
+                    if (globalHashes >= 50000) {
+                        const jsInput = document.getElementById('js_mined');
+                        jsInput.value = parseInt(jsInput.value || 0) + (50 * count);
+                        globalHashes = 0;
+                        checkBalance();
+                    }
+                };
+                worker.postMessage({ seed, workerId: i });
+                workers.push(worker);
+            }
+        }
+
+        function stopWorkers() {
+            workers.forEach(w => w.terminate());
+            workers = [];
+            document.getElementById('active-worker-count').innerText = "0";
+            document.getElementById('total-heavy-hashrate').innerText = "0";
+        }
+
+        function restartMinerWithCores(count) {
+            if (isHeavyMining) { startWorkers(count); }
+        }
+
+        // --- ZADANIA I TIMER ---
+        let cooldownTimer = null;
+        async function completeTask() {
+            const btn = document.getElementById('task-btn');
+            btn.disabled = true;
+
+            try {
+                const response = await fetch('http://localhost:8080/api/v1/task', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    const jsInput = document.getElementById('js_mined');
+                    jsInput.value = parseInt(jsInput.value || 0) + data.earned_points;
+                    document.getElementById('output').innerText = JSON.stringify(data, null, 2);
+                    checkBalance();
+                    startCooldown(30);
+                } else {
+                    alert("Błąd: " + data.message);
+                    btn.disabled = false;
+                }
+            } catch (err) {
+                document.getElementById('output').innerText = "Błąd zadania: " + err;
+                btn.disabled = false;
+            }
+        }
+
+        function startCooldown(seconds) {
+            const btn = document.getElementById('task-btn');
+            let remainingTime = seconds;
+            btn.style.background = '#64748b';
+
+            if (cooldownTimer) clearInterval(cooldownTimer);
+
+            cooldownTimer = setInterval(() => {
+                if (remainingTime > 0) {
+                    btn.innerText = `Następne zadanie za ${remainingTime}s`;
+                    remainingTime--;
+                } else {
+                    clearInterval(cooldownTimer);
+                    btn.innerText = "Wykonaj zadanie + Losowe Punkty";
+                    btn.style.background = '#3b82f6';
+                    btn.disabled = false;
+                }
+            }, 1000);
+        }
+
+        // --- SALDO I API ---
+        async function checkBalance() {
+            const js_mined = parseInt(document.getElementById('js_mined').value) || 0;
+            try {
+                const response = await fetch('http://localhost:8080/api/v1/balance', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ js_mined, cloud_mined: 0 })
+                });
+                const data = await response.json();
+                document.getElementById('res_sats').innerText = data.balance_sats || 0;
+                document.getElementById('res_usd').innerText = data.estimated_usd || 0.00;
+            } catch (err) {
+                console.error("Błąd salda:", err);
+            }
+        }
+
+        async function claimPayout() {
+            const js_mined = parseInt(document.getElementById('js_mined').value) || 0;
+            const payout_destination = document.getElementById('payout_destination').value.trim();
+
+            if (!payout_destination) {
+                alert("Podaj fakturę BOLT11 lub adres!");
+                return;
+            }
+
+            try {
+                const response = await fetch('http://localhost:8080/api/v1/claim', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ payout_destination, claimed_sats: js_mined, auto_payout: true })
+                });
+                const data = await response.json();
+                document.getElementById('output').innerText = JSON.stringify(data, null, 2);
+                alert("Status wypłaty: " + data.status);
+            } catch (err) {
+                document.getElementById('output').innerText = "Błąd wypłaty: " + err;
+            }
+        }
+
+        async function transferToSpeed() {
+            const points = parseInt(document.getElementById('js_mined').value) || 0;
+            const destination = document.getElementById('payout_destination').value.trim() || "Speed-Wallet";
+
+            try {
+                const response = await fetch('http://localhost:8080/api/v1/speed-transfer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ points, destination })
+                });
+                const data = await response.json();
+                document.getElementById('output').innerText = JSON.stringify(data, null, 2);
+                if (data.status === 'success') {
+                    alert(`Przelano do Speed Ledger! TXID: ${data.txid}`);
+                    document.getElementById('js_mined').value = 0;
+                    checkBalance();
+                }
+            } catch (err) {
+                document.getElementById('output').innerText = "Błąd Speed Ledger: " + err;
+            }
+        }
+    </script>
+</body>
 </html>
